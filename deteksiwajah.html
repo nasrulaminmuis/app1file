@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Face Detection Game - Catch Food</title>
+    <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background-color: #f0f0f0;
+        }
+        #video-container {
+            position: relative;
+            width: 720px;
+            height: 560px;
+        }
+        #video {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            transform: scaleX(-1);
+        }
+        canvas.face-detection {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100% !important;
+            height: 100% !important;
+            transform: scaleX(-1);
+        }
+        canvas.food-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100% !important;
+            height: 100% !important;
+        }
+        #status {
+            margin-bottom: 20px;
+            color: #666;
+            text-align: center;
+            padding: 10px;
+        }
+        #score {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            font-size: 24px;
+            color: #fff;
+            text-shadow: 2px 2px 2px #000;
+            z-index: 100;
+        }
+        .loading { color: #0066cc; }
+        .error { color: #cc0000; }
+    </style>
+</head>
+<body>
+    <div id="status" class="loading">Loading face-api.js...</div>
+    <div id="video-container">
+        <video id="video" autoplay muted playsinline></video>
+        <div id="score">Score: 0</div>
+    </div>
+
+    <script>
+        const video = document.getElementById('video');
+        const status = document.getElementById('status');
+        const scoreElement = document.getElementById('score');
+        let score = 0;
+        let foods = [];
+        let faceCanvas, foodCanvas, displaySize;
+
+        class Food {
+            constructor(x) {
+                this.x = x;
+                this.y = 0;
+                this.size = 30;
+                this.speed = 2;
+                this.emoji = '🍎';
+                this.caught = false;
+            }
+
+            update() {
+                if (!this.caught) {
+                    this.y += this.speed;
+                }
+            }
+
+            draw(ctx) {
+                if (!this.caught) {
+                    ctx.font = `${this.size}px Arial`;
+                    ctx.fillText(this.emoji, this.x, this.y);
+                }
+            }
+        }
+
+        const foodEmojis = ['🍎', '🍕', '🍔', '🍦', '🍩', '🍪'];
+
+        function updateStatus(message, isError = false) {
+            status.textContent = message;
+            status.className = isError ? 'error' : 'loading';
+        }
+
+        function isMouthOpen(landmarks) {
+            if (!landmarks) return false;
+            
+            const upperLip = landmarks.positions[62];
+            const lowerLip = landmarks.positions[66];
+            
+            const mouthDistance = Math.abs(upperLip.y - lowerLip.y);
+            const mouthThreshold = 25;
+            
+            return mouthDistance > mouthThreshold;
+        }
+
+        function addNewFood() {
+            const randomX = Math.random() * (displaySize.width - 30);
+            const food = new Food(randomX);
+            food.emoji = foodEmojis[Math.floor(Math.random() * foodEmojis.length)];
+            foods.push(food);
+        }
+
+        async function loadModels() {
+            const MODEL_URL = 'https://justadudewhohacks.github.io/face-api.js/models';
+            try {
+                updateStatus('Loading face detection models...');
+                await faceapi.loadTinyFaceDetectorModel(MODEL_URL);
+                await faceapi.loadFaceLandmarkModel(MODEL_URL);
+                await faceapi.loadFaceExpressionModel(MODEL_URL);
+                updateStatus('Models loaded successfully!');
+                return true;
+            } catch (error) {
+                console.error('Error loading models:', error);
+                updateStatus('Error loading models. Please check your internet connection and refresh.', true);
+                return false;
+            }
+        }
+
+        async function startDetection() {
+            try {
+                // Buat dua canvas terpisah untuk wajah dan makanan
+                faceCanvas = faceapi.createCanvasFromMedia(video);
+                foodCanvas = document.createElement('canvas');
+                faceCanvas.className = 'face-detection';
+                foodCanvas.className = 'food-layer';
+                
+                document.getElementById('video-container').append(faceCanvas);
+                document.getElementById('video-container').append(foodCanvas);
+                
+                const container = document.getElementById('video-container');
+                displaySize = {
+                    width: container.clientWidth,
+                    height: container.clientHeight
+                };
+
+                // Set ukuran kedua canvas
+                faceapi.matchDimensions(faceCanvas, displaySize);
+                foodCanvas.width = displaySize.width;
+                foodCanvas.height = displaySize.height;
+
+                addNewFood();
+                setInterval(addNewFood, 3000);
+
+                setInterval(async () => {
+                    const detections = await faceapi.detectAllFaces(video, 
+                        new faceapi.TinyFaceDetectorOptions())
+                        .withFaceLandmarks()
+                        .withFaceExpressions();
+
+                    const resizedDetections = faceapi.resizeResults(detections, displaySize);
+                    
+                    // Clear dan gambar deteksi wajah
+                    const faceCtx = faceCanvas.getContext('2d');
+                    faceCtx.clearRect(0, 0, faceCanvas.width, faceCanvas.height);
+                    faceapi.draw.drawDetections(faceCanvas, resizedDetections);
+                    faceapi.draw.drawFaceLandmarks(faceCanvas, resizedDetections);
+
+                    // Clear dan gambar makanan
+                    const foodCtx = foodCanvas.getContext('2d');
+                    foodCtx.clearRect(0, 0, foodCanvas.width, foodCanvas.height);
+
+                    foods.forEach((food, index) => {
+                        food.update();
+
+                        if (resizedDetections[0] && !food.caught) {
+                            const landmarks = resizedDetections[0].landmarks;
+                            const mouth = {
+                                x: displaySize.width - landmarks.positions[62].x,
+                                y: landmarks.positions[62].y
+                            };
+
+                            const distance = Math.sqrt(
+                                Math.pow(mouth.x - food.x, 2) + 
+                                Math.pow(mouth.y - food.y, 2)
+                            );
+
+                            if (distance < 50 && isMouthOpen(landmarks)) {
+                                food.caught = true;
+                                score += 10;
+                                scoreElement.textContent = `Score: ${score}`;
+                            }
+                        }
+
+                        food.draw(foodCtx);
+
+                        if (food.y > displaySize.height) {
+                            foods.splice(index, 1);
+                        }
+                    });
+
+                }, 100);
+
+                updateStatus('Game started! Open your mouth to catch the food!');
+            } catch (error) {
+                console.error('Error in detection:', error);
+                updateStatus('Error starting detection. Please refresh the page.', true);
+            }
+        }
+
+        async function startVideo() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: {
+                        width: { ideal: 720 },
+                        height: { ideal: 560 }
+                    } 
+                });
+                video.srcObject = stream;
+                updateStatus('Camera activated, waiting for video...');
+            } catch (error) {
+                console.error('Error accessing camera:', error);
+                updateStatus('Error accessing camera. Please ensure you have given camera permissions.', true);
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', async () => {
+            if (typeof faceapi === 'undefined') {
+                updateStatus('Error: face-api.js not loaded', true);
+                return;
+            }
+
+            const modelsLoaded = await loadModels();
+            if (!modelsLoaded) return;
+
+            await startVideo();
+            video.addEventListener('loadeddata', startDetection);
+        });
+    </script>
+</body>
+</html>
